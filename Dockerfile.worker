@@ -1,0 +1,48 @@
+# FinanceFlow - Dockerfile for Background Worker
+FROM node:18-alpine AS base
+
+# Install dependencies only when needed
+FROM base AS deps
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci --only=production && npm cache clean --force
+
+# Build stage
+FROM base AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Build the application (needed for TypeScript compilation)
+ENV NEXT_TELEMETRY_DISABLED 1
+RUN npm run build
+
+# Production image for worker
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 worker
+
+# Copy built application and dependencies
+COPY --from=builder --chown=worker:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=worker:nodejs /app/.next ./.next
+COPY --from=builder --chown=worker:nodejs /app/src ./src
+COPY --from=builder --chown=worker:nodejs /app/worker.js ./worker.js
+COPY --from=builder --chown=worker:nodejs /app/package.json ./package.json
+
+# Create logs directory
+RUN mkdir -p /app/logs && chown worker:nodejs /app/logs
+
+USER worker
+
+# Health check for worker
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+  CMD pgrep -f "node worker.js" || exit 1
+
+CMD ["node", "worker.js"]

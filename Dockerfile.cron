@@ -1,0 +1,44 @@
+# FinanceFlow - Dockerfile for Cron Jobs
+FROM node:18-alpine AS base
+
+# Install cron
+RUN apk add --no-cache dcron curl
+
+FROM base AS deps
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json* ./
+RUN npm ci --only=production && npm cache clean --force
+
+# Production image for cron
+FROM base AS runner
+WORKDIR /app
+
+ENV NODE_ENV production
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 cron-user
+
+# Copy dependencies and scripts
+COPY --from=deps --chown=cron-user:nodejs /app/node_modules ./node_modules
+COPY --chown=cron-user:nodejs package.json ./
+COPY --chown=cron-user:nodejs cron-scripts/ ./cron-scripts/
+
+# Create logs directory
+RUN mkdir -p /app/logs && chown cron-user:nodejs /app/logs
+
+# Create cron job file
+RUN echo "# FinanceFlow Cron Jobs" > /etc/cron.d/financeflow-cron && \
+    echo "# Process recurring transactions daily at 6 AM" >> /etc/cron.d/financeflow-cron && \
+    echo "0 6 * * * cron-user /usr/local/bin/node /app/cron-scripts/recurring-transactions.js >> /app/logs/cron.log 2>&1" >> /etc/cron.d/financeflow-cron && \
+    echo "# Reset usage counts monthly on 1st at midnight" >> /etc/cron.d/financeflow-cron && \
+    echo "0 0 1 * * cron-user /usr/local/bin/node /app/cron-scripts/reset-usage.js >> /app/logs/cron.log 2>&1" >> /etc/cron.d/financeflow-cron && \
+    echo "# Health check every 5 minutes" >> /etc/cron.d/financeflow-cron && \
+    echo "*/5 * * * * cron-user /usr/local/bin/node /app/cron-scripts/health-check.js >> /app/logs/cron.log 2>&1" >> /etc/cron.d/financeflow-cron && \
+    chmod 0644 /etc/cron.d/financeflow-cron
+
+USER root
+
+# Start cron daemon
+CMD ["crond", "-f", "-d", "8"]

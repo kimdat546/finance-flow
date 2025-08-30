@@ -1,0 +1,128 @@
+# FinanceFlow - Docker Compose for Coolify Deployment
+version: '3.8'
+
+services:
+  # Main Next.js Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: financeflow-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - REDIS_URL=redis://redis:6379
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - CRON_SECRET=${CRON_SECRET}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    depends_on:
+      - redis
+    networks:
+      - financeflow-network
+    volumes:
+      - ./logs:/app/logs
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.routers.financeflow.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.financeflow.tls=true"
+      - "traefik.http.routers.financeflow.tls.certresolver=letsencrypt"
+
+  # Background Worker for Message Processing
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: financeflow-worker
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    depends_on:
+      - redis
+    networks:
+      - financeflow-network
+    volumes:
+      - ./logs:/app/logs
+    labels:
+      - "coolify.managed=true"
+
+  # Redis for Queue Management
+  redis:
+    image: redis:7-alpine
+    container_name: financeflow-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - financeflow-network
+    labels:
+      - "coolify.managed=true"
+
+  # Cron Jobs Service (replaces Vercel cron)
+  cron:
+    build:
+      context: .
+      dockerfile: Dockerfile.cron
+    container_name: financeflow-cron
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CRON_SECRET=${CRON_SECRET}
+    depends_on:
+      - app
+    networks:
+      - financeflow-network
+    volumes:
+      - ./logs:/app/logs
+    labels:
+      - "coolify.managed=true"
+
+  # Optional: PostgreSQL (if not using Supabase)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: financeflow-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: financeflow
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #     - ./database:/docker-entrypoint-initdb.d
+  #   networks:
+  #     - financeflow-network
+
+volumes:
+  redis-data:
+    driver: local
+  # postgres-data:
+  #   driver: local
+
+networks:
+  financeflow-network:
+    driver: bridge
